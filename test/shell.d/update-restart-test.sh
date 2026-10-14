@@ -4,20 +4,6 @@ set -euo pipefail
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
-# The kernel check walks the real /usr/lib/modules; without an installed kernel
-# there the reboot-required branch is unreachable and there is nothing to test.
-installed_kernel=""
-for kernel in /usr/lib/modules/*/vmlinuz; do
-  [[ -f $kernel ]] || continue
-  installed_kernel=$(basename "$(dirname "$kernel")")
-  break
-done
-
-if [[ -z $installed_kernel ]]; then
-  pass "no kernel under /usr/lib/modules; skipping reboot-required checks"
-  exit 0
-fi
-
 test_tmp=$(mktemp -d)
 trap 'rm -rf "$test_tmp"' EXIT
 
@@ -26,12 +12,15 @@ call_log="$test_tmp/calls.log"
 home="$test_tmp/home"
 state_dir="$home/.local/state/omarchy"
 flag="$state_dir/reboot-required"
-mkdir -p "$mock_bin" "$state_dir"
+modules="$test_tmp/modules"
+mkdir -p "$mock_bin" "$state_dir" "$modules/7.2.8-arch1-1"
+touch "$modules/7.2.8-arch1-1/modules.builtin"
 
-cat >"$mock_bin/uname" <<SH
+# The running kernel is the installed one, so only the flag can ask for a reboot.
+cat >"$mock_bin/uname" <<'SH'
 #!/bin/bash
 
-echo "$installed_kernel"
+echo 7.2.8-arch1-1
 SH
 
 cat >"$mock_bin/pacman" <<'SH'
@@ -54,23 +43,22 @@ printf 'gum %s\n' "$*" >>"$CALL_LOG"
 exit 1
 SH
 
-for command in omarchy-system-reboot omarchy-restart-shell; do
-  cat >"$mock_bin/$command" <<'SH'
+cat >"$mock_bin/omarchy-system" <<'SH'
 #!/bin/bash
 
-printf '%s %s\n' "$(basename "$0")" "$*" >>"$CALL_LOG"
+printf 'omarchy-system %s\n' "$*" >>"$CALL_LOG"
 SH
-done
 chmod +x "$mock_bin"/*
 
 run_update_restart() {
   : >"$call_log"
   HOME="$home" PATH="$mock_bin:$ROOT/bin:$PATH" CALL_LOG="$call_log" \
-    "$ROOT/bin/omarchy-update-restart" >/dev/null
+    OMARCHY_KERNEL_MODULES_PATH="$modules" OMARCHY_UPDATE_UNATTENDED=0 \
+    "$ROOT/bin/omarchy-update-restart" --reboot-only >/dev/null
 }
 
 prompted_for_reboot() {
-  grep -qF 'gum confirm Updates require reboot. Ready?' "$call_log"
+  grep -qF 'Updates require reboot. Ready?' "$call_log"
 }
 
 boot_time=$(awk '/^btime/ {print $2}' /proc/stat)
