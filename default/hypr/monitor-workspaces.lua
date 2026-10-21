@@ -32,6 +32,12 @@ local MERGED_FILE = STATE_DIR .. "/monitor-workspaces-merged"
 
 local M = { slots = SLOTS }
 
+-- app-sandbox's private headless output, parked off screen where nothing else
+-- reaches it. It shows a named workspace of its own for the sandboxes, so it
+-- is nobody's display: it is never assigned a block, and its workspaces stay
+-- where its rule put them.
+local HIDDEN_OUTPUT = "APPSBX"
+
 -- Identity -> block, kept across sessions.
 local blocks = {}
 local written = nil
@@ -154,7 +160,7 @@ local function connected(gone)
   local monitors = {}
 
   for _, monitor in ipairs(hl.get_monitors()) do
-    if not monitor.is_mirror and monitor.name ~= gone then
+    if not monitor.is_mirror and monitor.name ~= gone and monitor.name ~= HIDDEN_OUTPUT then
       monitors[#monitors + 1] = monitor
     end
   end

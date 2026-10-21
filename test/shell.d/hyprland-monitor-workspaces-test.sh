@@ -43,8 +43,8 @@ local function workspace_numbered(id)
   end
 end
 
-local function create(id, monitor)
-  local workspace = { id = id, monitor = monitor }
+local function create(id, monitor, name)
+  local workspace = { id = id, monitor = monitor, name = name }
   world.workspaces[#world.workspaces + 1] = workspace
   return workspace
 end
@@ -99,7 +99,7 @@ function workspace_object(workspace)
   if not workspace then return nil end
   return setmetatable({}, { __index = function(_, key)
     if key == "id" then return workspace.id end
-    if key == "name" then return tostring(workspace.id) end
+    if key == "name" then return workspace.name or tostring(workspace.id) end
     if key == "special" then return false end
     if key == "windows" then return windows_on(workspace.id) end
     if key == "monitor" then return monitor_object(monitor_named(workspace.monitor)) end
@@ -259,6 +259,17 @@ end
 function window(address, id)
   if not workspace_numbered(id) then create(id, world.focused) end
   world.windows[address] = { workspace = id }
+end
+
+-- A named workspace, as a workspace rule pins one to an output whatever number
+-- Hyprland gave it.
+function named(id, name, monitor_name)
+  local workspace = workspace_numbered(id) or create(id, monitor_name or world.focused)
+  workspace.name = name
+  if monitor_name then
+    workspace.monitor = monitor_name
+  end
+  return workspace
 end
 
 function on(id)
@@ -568,6 +579,45 @@ check(world.windows["0xa"].workspace == 12 and on(12) == "DP-1", "the window kep
 check(shows("DP-1") == 12, "the monitor still shows it")
 ' || fail "a workspace on the wrong block joins its monitor's instead of jumping screens"
 pass "a workspace on the wrong block joins its monitor's instead of jumping screens"
+
+# --- The app-sandbox hidden output ------------------------------------------------
+
+run_lua sandbox '
+plug("eDP-1", 0, "Panel", 1)
+-- app-sandbox comes up: the hidden output arrives selected onto its named render
+-- workspace, which Hyprland numbers below every block.
+plug("APPSBX", 1, "APPSBX", -1337)
+named(-1337, "app-sandbox", "APPSBX")
+window("0xa", -1337)
+world.focused = "eDP-1"
+local m = load_module()
+world.handlers["hyprland.start"]()
+world.handlers["monitor.added"]({ name = "APPSBX" })
+check(shows("APPSBX") == -1337, "the hidden output keeps its named workspace, not " .. tostring(shows("APPSBX")))
+check(on(-1337) == "APPSBX" and world.windows["0xa"].workspace == -1337, "the named workspace stayed on the hidden output")
+check(m.workspace_id(hl.get_monitor("eDP-1"), 1) == 1, "the hidden output took no block")
+check(state_file():find("APPSBX", 1, true) == nil, "the bar reads no row for the hidden output: " .. state_file())
+
+-- Reconcile on reloads and hotplugs leaves the sandbox be all the same.
+world.handlers["config.reloaded"]()
+plug("DP-1", 2, "LG", 3)
+world.handlers["monitor.added"]({ name = "DP-1" })
+check(on(-1337) == "APPSBX" and world.windows["0xa"].workspace == -1337, "reconcile dragged the sandbox workspace to " .. tostring(on(-1337)))
+check(m.workspace_id(hl.get_monitor("DP-1"), 1) == 11, "the next monitor takes the block the hidden output did not")
+
+-- A numbered workspace an unplug evacuated onto the hidden output goes home
+-- when its monitor returns, unlike the named one that belongs there.
+window("0xb", 12)
+unplug("DP-1")
+for _, workspace in ipairs(world.workspaces) do
+  if workspace.id == 12 then workspace.monitor = "APPSBX" end
+end
+plug("DP-3", 3, "LG", 3)
+world.handlers["monitor.added"]({ name = "DP-3" })
+check(world.windows["0xb"].workspace == 12 and on(12) == "DP-3", "an evacuated workspace came home from the hidden output")
+check(on(-1337) == "APPSBX", "the named workspace was still left alone")
+' || fail "the app-sandbox hidden output is outside per-monitor workspaces"
+pass "the app-sandbox hidden output is outside per-monitor workspaces"
 
 run_lua parked '
 plug("eDP-1", 0, "Panel", 1)
