@@ -11,6 +11,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -76,7 +77,7 @@ def load(root):
     if key.startswith("KIMI_"):
       del os.environ[key]
   os.environ.update(HOME=str(root / "home with spaces"), KIMI_CODE_HOME=str(root / "code home"),
-                    XDG_CACHE_HOME=str(root / "cache"))
+                    PI_CODING_AGENT_DIR=str(root / "pi agent"), XDG_CACHE_HOME=str(root / "cache"))
   loader = importlib.machinery.SourceFileLoader("kimi_regression", sys.argv[1])
   spec = importlib.util.spec_from_loader(loader.name, loader)
   module = importlib.util.module_from_spec(spec)
@@ -267,6 +268,84 @@ def error_redaction(root):
   state["token_status"] = 401
   assert "RT_old" not in json.dumps(record()), "remote refresh error published a token"
 
+def pi_contract(root):
+  secret = "PI_FIXTURE_SECRET"
+  pi_dir = Path(os.environ["PI_CODING_AGENT_DIR"])
+  pi_dir.mkdir()
+  store = pi_dir / "auth.json"
+  store.write_text("Pi owns this fixture store")
+  mock_bin = root / "bin"
+  mock_bin.mkdir()
+  executable = mock_bin / "pi"
+  executable.write_text(f"#!{sys.executable}\n" + '''
+import json, os, subprocess, sys, time
+from pathlib import Path
+assert sys.argv[1:] == ["auth", "check", "--provider", "kimi-coding", "--json", "--credentials"]
+assert sys.stdin.read() == ""
+Path(os.environ["KIMI_TEST_PI_CALL"]).touch()
+mode = os.environ["KIMI_TEST_PI_MODE"]
+secret = "PI_FIXTURE_SECRET"
+sys.stderr.write(secret)
+if mode == "timeout":
+  subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+  sys.exit(0)  # The child holds stdout open after Pi exits.
+if mode == "malformed":
+  print(secret)
+  sys.exit(0)
+status = {"missing": "not_ready", "invalid": "invalid"}.get(mode, "ready")
+print(json.dumps({"status": status, "provider": "kimi-coding", "authType": mode,
+                  "credentials": secret, "error": secret}))
+sys.exit({"not_ready": 1, "invalid": 2}.get(status, 0))
+''')
+  executable.chmod(0o755)
+  original_path = os.environ["PATH"]
+  os.environ.update(PATH=str(mock_bin) + os.pathsep + original_path,
+                    KIMI_TEST_PI_CALL=str(root / "pi-called"), KIMI_TEST_PI_MODE="invalid")
+  try:
+    os.environ["KIMI_API_KEY"] = "AT_env"
+    assert record()["ready"]
+    del os.environ["KIMI_API_KEY"]
+    credentials("AT_cli", time.time() + 3600)
+    assert record()["ready"]
+    assert not (root / "pi-called").exists(), "Pi ran despite higher-priority credentials"
+    scanner.CREDENTIALS_PATH.unlink()
+    before = set(root.rglob("*"))
+    for auth_type in ("oauth", "api_key"):
+      os.environ["KIMI_TEST_PI_MODE"] = auth_type
+      data = record()
+      assert data["ready"] and data["limits"], "Pi credentials did not reach the usage endpoint"
+      assert requests[-1][1] == "Bearer " + secret, "Pi credential was not used as a bearer"
+      assert secret not in json.dumps(data), "Pi credential escaped into the usage record"
+      state["usage_status"] = 401
+      assert "/login kimi-coding" in record()["authHelpText"], "Pi rejection recommended the wrong login"
+      state.clear()
+    assert store.read_text() == "Pi owns this fixture store", "collector changed Pi's credentials"
+    for path in set(root.rglob("*")) - before:
+      if path.is_file():
+        assert secret not in path.read_text(), "Pi credential was persisted"
+    requests.clear()
+    for mode, hint in (("missing", "/login kimi-coding"), ("invalid", "/login kimi-coding"),
+                       ("malformed", "update Pi")):
+      os.environ["KIMI_TEST_PI_MODE"] = mode
+      result = subprocess.run([sys.argv[1], "--force"], stdin=subprocess.DEVNULL,
+                              capture_output=True, timeout=5)
+      data = json.loads(result.stdout)
+      assert not data["ready"] and hint in data["authHelpText"], "Pi lookup lost actionable recovery help"
+      assert secret.encode() not in result.stdout + result.stderr, "Pi output or diagnostics leaked"
+    assert not requests, "collector probed quota with unresolved Pi credentials"
+    os.environ["KIMI_TEST_PI_MODE"] = "timeout"
+    scanner.PI_AUTH_TIMEOUT_SECONDS = 0.2
+    start = time.monotonic()
+    data = record()
+    assert not data["ready"] and data["retryAdvised"] and "timed out" in data["authHelpText"]
+    assert time.monotonic() - start < 3, "Pi lookup exceeded its timeout with an inherited pipe"
+    executable.unlink()
+    os.environ["PATH"] = str(mock_bin)
+    assert "PATH" in record()["authHelpText"], "missing Pi did not explain how to recover"
+  finally:
+    os.environ["PATH"] = original_path
+
+
 def redirects(root):
   os.environ["KIMI_API_KEY"] = "AT_env"
   state["redirect"] = True
@@ -279,7 +358,7 @@ cases = {"destination": destination, "home": home_isolation, "static": static_to
          "rotation_cache": rotated_cache, "cache_identity": cache_identity,
          "concurrent_signin": concurrent_signin, "concurrent_logout": concurrent_logout,
          "invalid_grant": invalid_grant,
-         "key_help": key_help, "redaction": error_redaction, "redirects": redirects}
+         "key_help": key_help, "redaction": error_redaction, "pi_contract": pi_contract, "redirects": redirects}
 failed = False
 for name, check in cases.items():
   selected = os.environ.get("OMARCHY_TEST_KIMI_CASE")
