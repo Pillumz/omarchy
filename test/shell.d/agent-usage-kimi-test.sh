@@ -27,6 +27,7 @@ import sys
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 
 collector_path = str(Path(sys.argv[1]))
 test_home = Path(os.environ["TEST_HOME"])
@@ -57,6 +58,21 @@ summary["legacyFallback"] = scanner.credentials_dir() == legacy_dir
 os.environ["KIMI_CODE_HOME"] = str(test_home / "kimi-code")
 (code_dir / "kimi-code.json").write_text("{}")
 summary["codeStorePreferred"] = scanner.credentials_dir() == code_dir
+
+# With no Kimi CLI sign-in, Pi's external-client command supplies a fresh OAuth
+# bearer without the collector reading or writing Pi's credential files.
+del os.environ["KIMI_CODE_HOME"]
+calls = []
+def pi_bearer(command, **kwargs):
+  calls.append((command, kwargs))
+  return SimpleNamespace(returncode=0, stdout="pi_oauth\n")
+scanner.subprocess.run = pi_bearer
+auth = {}
+summary["piFallback"] = scanner.api_key(auth) == "pi_oauth" and auth["key"] == "pi_oauth" and calls == [(
+  ["pi", "auth", "print-bearer-token", "--provider", "kimi-coding", "--min-expiry", "5m"],
+  {"capture_output": True, "text": True, "timeout": 30, "check": False},
+)]
+os.environ["KIMI_CODE_HOME"] = str(test_home / "kimi-code")
 
 # A fresh token is used as-is; an expired one is refreshed under the lock and
 # the rotated single-use refresh token is persisted back.
@@ -112,12 +128,17 @@ summary["limits"] = limits
 
 os.environ["KIMI_API_KEY"] = "kimi_env"
 scanner.quota = lambda key: payload
+config_dir = test_home / "config" / "omarchy" / "agents"
+config_dir.mkdir(parents=True)
+(config_dir / "kimi.json").write_text(json.dumps({"planLabel": "Ultra"}))
+os.environ["XDG_CONFIG_HOME"] = str(test_home / "config")
 sys.argv = ["omarchy-agent-usage-kimi", "--limits-only"]
 out = io.StringIO()
 with redirect_stdout(out):
   scanner.main()
 summary["record"] = json.loads(out.getvalue())
 summary["quotaOnly"] = not summary["record"]["hasLocalStats"] and not summary["record"]["hasPromptStats"]
+summary["planLabel"] = summary["record"]["tierLabel"] == "Ultra"
 
 print(json.dumps(summary, separators=(",", ":")))
 PY
@@ -130,6 +151,10 @@ pass "Kimi collector prefers KIMI_API_KEY over stored credentials"
 [[ $(jq -r '"\(.codeStorePreferred):\(.legacyFallback)"' <<<"$result") == "true:true" ]] ||
   fail "Kimi collector prefers the kimi-code store and falls back to legacy kimi-cli" "$result"
 pass "Kimi collector prefers the kimi-code store and falls back to legacy kimi-cli"
+
+[[ $(jq -r '.piFallback' <<<"$result") == "true" ]] ||
+  fail "Kimi collector uses Pi's refreshed OAuth bearer when Kimi CLI has no sign-in" "$result"
+pass "Kimi collector uses Pi's refreshed OAuth bearer when Kimi CLI has no sign-in"
 
 [[ $(jq -r '"\(.freshTokenUsed):\(.refreshRotates)"' <<<"$result") == "true:true" ]] ||
   fail "Kimi collector refreshes expired tokens and persists the rotated pair" "$result"
@@ -146,6 +171,10 @@ pass "Kimi collector renders usage windows into display rows"
 [[ $(jq -r '.record.ready | tostring' <<<"$result") == "true" && $(jq -r '.record.id' <<<"$result") == "kimi" ]] ||
   fail "Kimi collector prints the display-ready record contract" "$result"
 pass "Kimi collector prints the display-ready record contract"
+
+[[ $(jq -r '.planLabel' <<<"$result") == "true" ]] ||
+  fail "Kimi collector exposes the configured plan label" "$result"
+pass "Kimi collector exposes the configured plan label"
 
 [[ $(jq -r '.quotaOnly' <<<"$result") == "true" ]] || fail "Kimi quota is not local usage statistics" "$result"
 pass "Kimi quota is not local usage statistics"

@@ -362,6 +362,13 @@ panelRoot.nowMs += 1000
 assertDeepEqual(limitWindows(measured), [{ title: 'Session', percent: 0, resetAt: '' }], 'usage resets at the deadline while the panel stays open')
 assertEqual(measured.limits[0].percent, 0.78, 'display reset leaves the measured record intact')
 
+const Commons = { I18n: { formatNumber: value => String(value) } }
+eval(source.slice(source.indexOf('function percentNumber'), source.indexOf('function scopedAllowanceText')))
+assertEqual(percentNumber(0), '0', 'true zero remains zero')
+assertEqual(percentNumber(0.0033), '<1', 'small nonzero usage does not round to zero')
+assertEqual(percentNumber(0.01), '1', 'one percent remains one')
+assertEqual(percentNumber(0.126), '13', 'ordinary percentages retain whole-number rounding')
+
 // A model's weekly allowance rides under the Weekly row; one whose window has
 // no row of its own keeps a row.
 assertDeepEqual(

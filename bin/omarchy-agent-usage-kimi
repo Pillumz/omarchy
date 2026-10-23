@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -99,6 +100,15 @@ def empty_stats() -> dict[str, Any]:
   }
 
 
+def plan_label() -> str:
+  config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+  try:
+    configured = json.loads((config_home / "omarchy" / "agents" / "kimi.json").read_text()).get("planLabel")
+  except (OSError, json.JSONDecodeError, AttributeError):
+    return ""
+  return " ".join(configured.split())[:40] if isinstance(configured, str) else ""
+
+
 def base_record(**overrides: Any) -> dict[str, Any]:
   record: dict[str, Any] = {
     "schemaVersion": 1,
@@ -111,7 +121,7 @@ def base_record(**overrides: Any) -> dict[str, Any]:
     # reports the same truth, so aggregation must not sum them.
     "scope": "account",
     "hasPromptStats": False,
-    "tierLabel": "",
+    "tierLabel": plan_label(),
     "usageStatusText": "",
     "authHelpText": "",
     "limits": [],
@@ -295,6 +305,25 @@ def refresh_credentials(auth: dict[str, str] | None = None) -> dict[str, Any]:
     return credentials
 
 
+def pi_bearer_token(auth: dict[str, str] | None = None) -> str:
+  # An explicit Kimi home is account-isolating; never borrow Pi's sign-in then.
+  if os.environ.get("KIMI_CODE_HOME"):
+    return ""
+  try:
+    result = subprocess.run(
+      ["pi", "auth", "print-bearer-token", "--provider", "kimi-coding", "--min-expiry", "5m"],
+      capture_output=True, text=True, timeout=30, check=False,
+    )
+  except (OSError, subprocess.TimeoutExpired):
+    return ""
+  key = result.stdout.strip() if result.returncode == 0 else ""
+  if not key or len(key) > 8192 or any(character.isspace() for character in key):
+    return ""
+  if auth is not None:
+    auth["key"] = key
+  return key
+
+
 def api_key(auth: dict[str, str] | None = None) -> str:
   key = os.environ.get("KIMI_API_KEY", "").strip()
   if key:
@@ -305,6 +334,8 @@ def api_key(auth: dict[str, str] | None = None) -> str:
   if auth is not None:
     auth["key"] = str(credentials.get("access_token") or "")
   if not credentials.get("access_token"):
+    if key := pi_bearer_token(auth):
+      return key
     raise KimiError(AUTH_HELP)
   if not token_fresh(credentials):
     credentials = refresh_credentials(auth)
@@ -425,7 +456,9 @@ def to_limits(data: dict[str, Any]) -> list[dict[str, Any]]:
       except (TypeError, ValueError):
         continue
       if math.isfinite(ratio):
-        row = {"label": label, "percent": min(1.0, max(0.0, ratio)), "resetsAt": reset_at(detail)}
+        row = {"id": key, "label": label, "percent": min(1.0, max(0.0, ratio)), "resetsAt": reset_at(detail)}
+        if key == "limit_5h":
+          row["durationSeconds"] = 5 * 60 * 60
         if key == "limit_month_code":
           row["title"] = "Code Monthly"
         limits.append(row)

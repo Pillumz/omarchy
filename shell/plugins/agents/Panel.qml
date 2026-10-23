@@ -616,8 +616,13 @@ Panel {
     return value
   }
 
+  function percentNumber(fraction) {
+    var percent = Number(fraction) * 100
+    return percent > 0 && percent < 1 ? "<" + Commons.I18n.formatNumber(1) : Commons.I18n.formatNumber(Math.round(percent))
+  }
+
   function scopedAllowanceText(scoped, windowTitle) {
-    var percent = Commons.I18n.formatNumber(Math.round(scoped.percent * 100))
+    var percent = percentNumber(scoped.percent)
     var value = String(windowTitle || "")
     if (value === "Session") return Commons.I18n.t("agents.scopedSession").arg(scoped.title).arg(percent)
     if (value === "Weekly") return Commons.I18n.t("agents.scopedWeekly").arg(scoped.title).arg(percent)
@@ -1997,7 +2002,7 @@ Panel {
         var lines = []
         if (compact.window) {
           var windowName = root.windowDisplayTitle(compact.window.title)
-          var used = Commons.I18n.formatNumber(Math.round(compact.window.percent * 100))
+          var used = root.percentNumber(compact.window.percent)
           lines.push(compact.resetMs > 0
             ? Commons.I18n.t("agents.windowUsedResets").arg(windowName).arg(used).arg(root.formatDuration(compact.resetMs))
             : Commons.I18n.t("agents.windowUsed").arg(windowName).arg(used))

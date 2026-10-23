@@ -22,7 +22,9 @@ from pathlib import Path
 
 requests = []
 state = {}
-payload = {"usages": {"limit_5h": {"used_ratio": 0.25, "reset_time": "2026-10-15T12:00:00Z"},
+payload = {"limits": [{"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                       "detail": {"limit": "100", "used": "4", "remaining": "96"}}],
+           "usages": {"limit_5h": {"used_ratio": 0.25, "reset_time": "2026-10-15T12:00:00Z"},
                       "limit_7d": {"used_ratio": "0.8"}, "limit_month_total": {"used_ratio": 1},
                       "limit_month_code": {"used_ratio": 0}}}
 
@@ -196,6 +198,9 @@ def modern_quota(root):
   data = record()
   assert [row["percent"] for row in data["limits"]] == [0.25, 0.8, 1, 0], "current CLI quota windows were dropped"
   assert data["limits"][0]["resetsAt"] == "2026-10-15T12:00:00Z"
+  assert [row.get("id") for row in data["limits"]] == ["limit_5h", "limit_7d", "limit_month_total", "limit_month_code"]
+  assert data["limits"][0]["durationSeconds"] == 18000
+  assert all("used" not in row and "limit" not in row for row in data["limits"]), "request-rate counters leaked into plan quota"
   assert data["limits"][-1].get("title") == "Code Monthly", "monthly code allowance lost its scope"
   assert not data["hasLocalStats"] and not data["hasPromptStats"], "quota was advertised as local history"
   scanner.USAGE_URL = "https://api.kimi.ai/coding/v1/usages"
