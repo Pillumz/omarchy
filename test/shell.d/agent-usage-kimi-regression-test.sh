@@ -273,7 +273,7 @@ def pi_contract(root):
   pi_dir = Path(os.environ["PI_CODING_AGENT_DIR"])
   pi_dir.mkdir()
   store = pi_dir / "auth.json"
-  store.write_text("Pi owns this fixture store")
+  stored = json.dumps({"kimi-coding": {"type": "oauth", "access": "PI_STORED_SECRET"}})
   mock_bin = root / "bin"
   mock_bin.mkdir()
   executable = mock_bin / "pi"
@@ -302,15 +302,40 @@ sys.exit({"not_ready": 1, "invalid": 2}.get(status, 0))
   os.environ.update(PATH=str(mock_bin) + os.pathsep + original_path,
                     KIMI_TEST_PI_CALL=str(root / "pi-called"), KIMI_TEST_PI_MODE="invalid")
   try:
+    # No sign-in, unrelated sign-ins and damaged stores never start the lazy
+    # launcher (even when Pi is on PATH). The real collector must stay quiet.
+    del os.environ["KIMI_CODE_HOME"]
+    for content in (None, "{}", '{"openai-codex": {"type": "oauth"}}', "[]", "broken"):
+      if content is not None:
+        store.write_text(content)
+      result = subprocess.run([sys.argv[1], "--force"], capture_output=True, timeout=5)
+      assert result.returncode == 0 and not json.loads(result.stdout)["ready"]
+      assert not (root / "pi-called").exists(), "unsigned background refresh invoked Pi"
+    store.write_text(stored)
+    os.environ["KIMI_CODE_HOME"] = str(root / "code home")
+    assert not record()["ready"]
+    assert not (root / "pi-called").exists(), "explicit Kimi home borrowed Pi's account"
+    del os.environ["KIMI_CODE_HOME"]
+    scanner.CREDENTIALS_DIR = Path.home() / ".kimi-code" / "credentials"
+    scanner.CREDENTIALS_PATH = scanner.CREDENTIALS_DIR / "kimi-code.json"
     os.environ["KIMI_API_KEY"] = "AT_env"
     assert record()["ready"]
     del os.environ["KIMI_API_KEY"]
     credentials("AT_cli", time.time() + 3600)
     assert record()["ready"]
+    state["usage_status"] = 401
+    assert "kimi login" in record()["authHelpText"]
+    state.clear()
+    credentials()
+    state["token_status"] = 401
+    assert not record()["ready"]
+    state.clear()
     assert not (root / "pi-called").exists(), "Pi ran despite higher-priority credentials"
     scanner.CREDENTIALS_PATH.unlink()
     before = set(root.rglob("*"))
     for auth_type in ("oauth", "api_key"):
+      stored = json.dumps({"kimi-coding": {"type": auth_type}})
+      store.write_text(stored)
       os.environ["KIMI_TEST_PI_MODE"] = auth_type
       data = record()
       assert data["ready"] and data["limits"], "Pi credentials did not reach the usage endpoint"
@@ -319,10 +344,21 @@ sys.exit({"not_ready": 1, "invalid": 2}.get(status, 0))
       state["usage_status"] = 401
       assert "/login kimi-coding" in record()["authHelpText"], "Pi rejection recommended the wrong login"
       state.clear()
-    assert store.read_text() == "Pi owns this fixture store", "collector changed Pi's credentials"
+    assert store.read_text() == stored, "collector changed Pi's credentials"
     for path in set(root.rglob("*")) - before:
       if path.is_file():
         assert secret not in path.read_text(), "Pi credential was persisted"
+    # The default store works too; an explicit Pi directory must not fall
+    # back to it and silently select another account.
+    default_store = Path.home() / ".pi" / "agent" / "auth.json"
+    default_store.parent.mkdir(parents=True)
+    store.rename(default_store)
+    del os.environ["PI_CODING_AGENT_DIR"]
+    assert record()["ready"], "default Pi sign-in was not discovered"
+    (root / "pi-called").unlink()
+    os.environ["PI_CODING_AGENT_DIR"] = str(pi_dir)
+    assert not record()["ready"] and not (root / "pi-called").exists(), "Pi directory override was ignored"
+    default_store.rename(store)
     requests.clear()
     for mode, hint in (("missing", "/login kimi-coding"), ("invalid", "/login kimi-coding"),
                        ("malformed", "update Pi")):
@@ -337,7 +373,8 @@ sys.exit({"not_ready": 1, "invalid": 2}.get(status, 0))
     scanner.PI_AUTH_TIMEOUT_SECONDS = 0.2
     start = time.monotonic()
     data = record()
-    assert not data["ready"] and data["retryAdvised"] and "timed out" in data["authHelpText"]
+    assert not data["ready"] and "timed out" in data["authHelpText"]
+    assert not data.get("retryAdvised"), "local Pi failure requested a service retry"
     assert time.monotonic() - start < 3, "Pi lookup exceeded its timeout with an inherited pipe"
     executable.unlink()
     os.environ["PATH"] = str(mock_bin)

@@ -10,7 +10,7 @@ trap 'rm -rf "$TEST_HOME"' EXIT
 
 # Without credentials the collector must still print a full, hidden-by-default
 # record: the update runner writes whatever valid JSON appears on stdout.
-no_key=$(HOME="$TEST_HOME" PI_CODING_AGENT_DIR="$TEST_HOME/pi" PI_OFFLINE=1 KIMI_CODE_HOME="$TEST_HOME/kimi-code" KIMI_API_KEY="" \
+no_key=$(HOME="$TEST_HOME" KIMI_CODE_HOME="$TEST_HOME/kimi-code" KIMI_API_KEY="" \
   "$ROOT/bin/omarchy-agent-usage-kimi")
 
 [[ $(jq -r '.id + ":" + (.ready | tostring) + ":" + (.scope)' <<<"$no_key") == "kimi:false:account" ]] ||
