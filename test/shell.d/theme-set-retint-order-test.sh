@@ -86,7 +86,10 @@ STUB
 # theme replaced it.
 cat >"$commands/omarchy-shell" <<'STUB'
 #!/bin/bash
-if [[ $2 == "themeIntroStatus" && -f $TEST_TMP/intro-hold ]]; then
+if [[ -n ${TEST_SHELL_GONE:-} ]]; then
+  echo "omarchy-shell is not running" >&2
+  exit 1
+elif [[ $2 == "themeIntroStatus" && -f $TEST_TMP/intro-hold ]]; then
   if [[ $(<"$TEST_STATE/theme.name") == "beta" && $3 == "$(stat -Lc '%d:%i' "$TEST_STATE/theme")" ]]; then
     echo "$3" >"$TEST_TMP/intro-hold"
   fi
@@ -310,3 +313,14 @@ wait_logged '^omarchy-theme-set-gnome$' "other apps retint when the switch token
 wait_for_detached_work
 rmdir "$state/theme.generation"
 pass "a switch whose token cannot be written still retints the other apps"
+
+# No shell answers, as when a worktree's shell was left running in its place:
+# the files switch, but the desktop keeps the old theme, so say so and offer
+# the restart that brings the session's shell back.
+rm -f "$test_tmp/release"
+touch "$test_tmp/release"
+TEST_SHELL_GONE=1 set_theme beta
+grep -q 'omarchy-shell did not answer' "$test_tmp/stderr" || fail "an unanswered switch says so on stderr" "$(cat "$test_tmp/stderr")"
+wait_logged '^notify: .*omarchy-restart-shell' "an unanswered switch offers a shell restart in a notification"
+wait_for_detached_work
+pass "a switch the shell never takes is reported with a restart offer"
