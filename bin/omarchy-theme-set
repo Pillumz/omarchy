@@ -92,7 +92,7 @@ report_unreachable_shell() {
 
   echo "Theme not applied to the desktop: omarchy-shell did not answer. Run omarchy-restart-shell." >&2
   omarchy-notification-send -u critical "$(omarchy-i18n theme.notAppliedToDesktop)" "$(omarchy-i18n theme.shellNotAnswering)" \
-    --action "$(omarchy-i18n theme.restartShell)" omarchy-restart-shell </dev/null >/dev/null 2>&1 8>&- 9>&- &
+    --action "$(omarchy-i18n theme.restartShell)" omarchy-restart-shell >/dev/null 2>&1 &
 }
 
 # Wait, at most three seconds, while a shell call answers <pending>.

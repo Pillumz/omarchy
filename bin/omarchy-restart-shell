@@ -81,34 +81,20 @@ fi
 # so the client gets time to see that through, and the wait below covers a
 # client that timed out anyway: the fresh shell refuses to start next to a
 # still-dying instance (-n), which is how a restart used to end with no bar.
-#
-# An Omarchy shell running another checkout's config goes too: a worktree's
-# shell started to check a change and never put back, or the installed one
-# after `omarchy dev link`. omarchy-shell cannot reach it, so theme switches
-# and updates fail without a word, and it keeps the notification server and
-# polkit agent from the fresh shell. A config counts as Omarchy's only when
-# its tree has omarchy-launch-shell, so another Quickshell config is left be.
-omarchy_shell_dirs() {
-  local config dir
+while timeout 30 quickshell kill -p "$CONFIG_DIR" --any-display >/dev/null 2>&1; do :; done
 
-  printf '%s\n' "$CONFIG_DIR"
-  while IFS= read -r config; do
-    [[ $config == */shell/shell.qml ]] || continue
-    dir=${config%/shell.qml}
-    [[ -x ${dir%/shell}/bin/omarchy-launch-shell ]] && printf '%s\n' "$dir"
-  done < <(quickshell list -a -j 2>/dev/null | jq -r '.[].config_path' 2>/dev/null)
-}
-
-mapfile -t shell_dirs < <(omarchy_shell_dirs | awk '!seen[$0]++')
-
-for dir in "${shell_dirs[@]}"; do
-  while timeout 30 quickshell kill -p "$dir" --any-display >/dev/null 2>&1; do :; done
-done
+# Another checkout's shell goes too: a worktree's, left after a visual check.
+# omarchy-shell cannot reach it, and it keeps the notification server and
+# polkit agent from the fresh shell. Only a config inside an Omarchy tree
+# counts, so someone's own Quickshell config is left running.
+while IFS= read -r config; do
+  dir=${config%/shell.qml}
+  [[ -x ${dir%/shell}/bin/omarchy-launch-shell ]] && timeout 30 quickshell kill -p "$dir" --any-display >/dev/null 2>&1
+done < <(quickshell list -a -j 2>/dev/null | jq -r '.[].config_path | select(endswith("/shell/shell.qml"))' 2>/dev/null)
 
 shell_instance_running() {
   quickshell list -a -j 2>/dev/null |
-    jq -e '[$ARGS.positional[] + "/"] as $dirs | any(.[]; .config_path as $path | any($dirs[]; . as $dir | $path | startswith($dir)))' \
-      --args "${shell_dirs[@]}" >/dev/null 2>&1
+    jq -e --arg dir "$CONFIG_DIR/" 'any(.[]; .config_path | startswith($dir))' >/dev/null 2>&1
 }
 
 deadline=$((SECONDS + 30))
