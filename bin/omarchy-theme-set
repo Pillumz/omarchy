@@ -75,26 +75,6 @@ shell_ipc() {
   timeout 2 omarchy-shell "$@" >/dev/null 2>&1
 }
 
-# Every way the shell takes the new palette falls back to this. When even it
-# goes unanswered, the files moved on and the desktop kept the old colours,
-# which looks like the switch did nothing.
-THEME_SHELL_UNREACHABLE=false
-apply_theme_in_shell() {
-  shell_ipc shell applyTheme "$colors_payload" "$shell_payload" || THEME_SHELL_UNREACHABLE=true
-}
-
-# The shell is gone, or another checkout's is running in its place (a
-# worktree's, left after a visual check), out of omarchy-shell's reach. A
-# restart brings back the session's own. A shell that is not running cannot
-# show this, but one from another checkout still holds the notification server.
-report_unreachable_shell() {
-  [[ $THEME_SHELL_UNREACHABLE == "true" ]] || return 0
-
-  echo "Theme not applied to the desktop: omarchy-shell did not answer. Run omarchy-restart-shell." >&2
-  omarchy-notification-send -u critical "$(omarchy-i18n theme.notAppliedToDesktop)" "$(omarchy-i18n theme.shellNotAnswering)" \
-    --action "$(omarchy-i18n theme.restartShell)" omarchy-restart-shell >/dev/null 2>&1 &
-}
-
 # Wait, at most three seconds, while a shell call answers <pending>.
 wait_for_theme_intro() {
   local pending="$1" deadline=$((SECONDS + 3))
@@ -238,7 +218,7 @@ set_theme_background() {
   if [[ -z $CHOSEN_THEME_BACKGROUND || ! -f $CHOSEN_THEME_BACKGROUND ]]; then
     if ! choose_theme_background; then
       omarchy-notification-send "$(omarchy-i18n theme.noBackground)" -t 2000
-      apply_theme_in_shell
+      shell_ipc shell applyTheme "$colors_payload" "$shell_payload" || true
       return
     fi
   fi
@@ -275,15 +255,15 @@ set_theme_background() {
 
   if [[ -f $OLD_BACKGROUND_SNAPSHOT && -f $new_background_snapshot ]]; then
     shell_ipc background themeTransition "$OLD_BACKGROUND_SNAPSHOT" "$new_background_snapshot" "$new_background" "$colors_payload" "$shell_payload" || \
-      apply_theme_in_shell
+      shell_ipc shell applyTheme "$colors_payload" "$shell_payload" || true
     (sleep 3; rm -f "$OLD_BACKGROUND_SNAPSHOT" "$new_background_snapshot") &
   elif [[ -f $new_background_snapshot ]]; then
     shell_ipc background themeTransition "" "$new_background_snapshot" "$new_background" "$colors_payload" "$shell_payload" || \
-      apply_theme_in_shell
+      shell_ipc shell applyTheme "$colors_payload" "$shell_payload" || true
     (sleep 3; rm -f "$new_background_snapshot") &
   else
     shell_ipc background themeTransition "$OLD_BACKGROUND_SNAPSHOT" "$new_background" "$new_background" "$colors_payload" "$shell_payload" || \
-      apply_theme_in_shell
+      shell_ipc shell applyTheme "$colors_payload" "$shell_payload" || true
     if [[ -f $OLD_BACKGROUND_SNAPSHOT ]]; then
       (sleep 3; rm -f "$OLD_BACKGROUND_SNAPSHOT") &
     fi
@@ -530,7 +510,7 @@ if [[ $THEME_HEADLESS == "1" ]]; then
   # render.
   [[ $OMARCHY_THEME_SKIP_BACKGROUND == "1" ]] || set_theme_background_link || true
 elif [[ $OMARCHY_THEME_SKIP_BACKGROUND == "1" ]]; then
-  apply_theme_in_shell
+  shell_ipc shell applyTheme "$colors_payload" "$shell_payload" || true
 else
   set_theme_background
 fi
@@ -539,8 +519,6 @@ fi
 # the transition. Let another theme selection queue only behind that critical
 # section, not behind slower app-retint hooks and selector cache warmups.
 flock -u 9
-
-report_unreachable_shell
 
 # What the user is looking at: the terminals and the programs drawn inside
 # them, plus the window borders when no intro is playing. These run as soon as
