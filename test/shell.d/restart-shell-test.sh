@@ -71,10 +71,14 @@ case " $* " in
     if [[ $3 != "$OMARCHY_TEST_SESSION_PATH/shell" ]]; then
       pid=$(awk -v dir="$3" '$1 == dir { print $2; exit }' "$strays" 2>/dev/null)
       [[ $pid =~ ^[0-9]+$ ]] || exit 1
-      kill "$pid" 2>/dev/null
-      awk -v dir="$3" '$1 != dir' "$strays" >"$strays.next"
-      mv "$strays.next" "$strays"
-      exit 0
+      # The instance outlasts the client's timeout and exits a moment later.
+      (
+        sleep 0.5
+        kill "$pid" 2>/dev/null
+        awk -v dir="$3" '$1 != dir' "$strays" >"$strays.next"
+        mv "$strays.next" "$strays"
+      ) &
+      exit 124
     fi
 
     pid=$(head -n 1 "$OMARCHY_TEST_QS_STATE")
@@ -87,6 +91,7 @@ case " $* " in
   *' -n -p '*)
     printf '%s\n' "${OMARCHY_TEST_TRANSIENT_ENV-unset}" >"$OMARCHY_TEST_QS_ENV_LOG"
     printf '303\n' >"$OMARCHY_TEST_QS_STATE"
+    [[ ! -f $strays ]] || cp "$strays" "$strays.at-launch"
     ;;
 esac
 SH
@@ -318,6 +323,7 @@ OMARCHY_TEST_SESSION_PATH="$restart_root" \
 if kill -0 "$restart_pid_one" 2>/dev/null; then
   fail "restart stops a worktree's shell" "$(cat "$restart_log")"
 fi
+! grep -q "^$worktree_root/shell " "$test_tmp/strays.at-launch" || fail "restart waits for a slow worktree shell to exit before launching"
 kill -0 "$restart_pid_two" 2>/dev/null || fail "restart leaves a Quickshell config outside Omarchy running"
 wait "$restart_pid_one" 2>/dev/null || true
 restart_pid_one=""
