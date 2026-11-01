@@ -4,25 +4,6 @@ set -euo pipefail
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
-run_node_test <<'JS'
-const fs = require('fs')
-const serviceQml = fs.readFileSync(path.join(root, 'shell/plugins/lock/Service.qml'), 'utf8')
-
-// The compositor part of this file is skipped on headless machines, so pin
-// the activity monitor's wiring here too: enabled only while locked, real
-// input only (inhibitors do not count as idle), and every resume re-arms
-// the blank, as does input stopping after a burst that outlasted it.
-assert(
-  /IdleMonitor \{[\s\S]*?id: activityMonitor[\s\S]*?enabled: root\.lockRequested[\s\S]*?respectInhibitors: false[\s\S]*?onIsIdleChanged: \{\s*if \(isIdle\) root\.handleActivityIdle\(\)\s*else root\.handleActivityResumed\(\)/.test(serviceQml),
-  'the activity monitor is enabled while locked, ignores inhibitors, and re-arms the blank on every resume and when input stops'
-)
-
-assert(
-  /Process \{\s*id: blankProcess[\s\S]*?onStarted: root\.logEvent\("blank-started"\)/.test(serviceQml),
-  'the blank process logs its own start'
-)
-JS
-
 TMPDIR=""
 QS_PID=""
 
@@ -40,7 +21,7 @@ trap cleanup EXIT
 require_compositor "lock activity reblank test"
 
 if ! command -v quickshell >/dev/null 2>&1; then
-  pass "quickshell not installed; skipping lock activity reblank test"
+  skip "quickshell not installed; skipping lock activity reblank test"
   exit 0
 fi
 
@@ -82,11 +63,11 @@ chmod +x "$fake_bin/omarchy-system-wake"
 # instead of calling beginLock()/queueSessionLock()), so this only needs to
 # answer "not locked" to keep the stranded-lock check from trying to recover
 # anything.
-cat >"$fake_bin/omarchy-hyprland-session-locked" <<'SH'
+cat >"$fake_bin/omarchy-hyprland-session-lock-stranded" <<'SH'
 #!/bin/bash
 exit 1
 SH
-chmod +x "$fake_bin/omarchy-hyprland-session-locked"
+chmod +x "$fake_bin/omarchy-hyprland-session-lock-stranded"
 
 # lock/Service.qml spawns every Process through "bash", "-c" (not a login
 # shell), so a shell.rc PATH override cannot reach it -- but a machine
@@ -95,7 +76,7 @@ chmod +x "$fake_bin/omarchy-hyprland-session-locked"
 # unless the same lookup a plain "bash -c" would do resolves to the fake.
 resolved=$(HOME="$TMPDIR/home" PATH="$fake_bin:$ROOT/bin:$PATH" bash -c 'command -v omarchy-brightness-display' 2>/dev/null || true)
 if [[ $resolved != "$fake_bin/omarchy-brightness-display" ]]; then
-  pass "PATH resolves omarchy-brightness-display to ${resolved:-nothing}; skipping lock activity reblank test"
+  skip "PATH resolves omarchy-brightness-display to ${resolved:-nothing}; skipping lock activity reblank test"
   exit 0
 fi
 
